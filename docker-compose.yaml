@@ -1,0 +1,89 @@
+services:
+  grafana:
+    image: grafana/grafana-enterprise
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: true
+      GF_AUTH_ANONYMOUS_ORG_NAME: NONE
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_PLUGINS_PREINSTALL: grafana-mqtt-datasource
+    ports:
+      - '3000:3000'
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    networks:
+      - cardash
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mosquitto
+    restart: unless-stopped
+    networks:
+      - cardash
+    configs:
+      - source: mosquitto.conf
+        target: /mosquitto/config/mosquitto.conf
+  obd_reader:
+    build: ./obd_reader
+    container_name: obd_reader
+    restart: unless-stopped
+    environment:
+      MQTT_BROKER: "mosquitto"
+      MQTT_PORT: "1883"
+    networks:
+      - cardash
+  telegraf:
+    image: telegraf
+    container_name: telegraf
+    restart: unless-stopped
+    environment:
+      HOSTNAME: telegraf
+    configs:
+      - source: telegraf.conf
+        target: /etc/telegraf/telegraf.conf
+    networks:
+      - cardash
+  victoriametrics:
+    image: victoriametrics/victoria-metrics
+    container_name: victoriametrics
+    restart: unless-stopped
+    ports:
+      - 8428:8428
+    volumes:
+      - victoria-storage:/storage
+    command:
+      - "--storageDataPath=/storage"
+      - "--httpListenAddr=:8428"
+      - "--search.latencyOffset=0"
+    networks:
+      - cardash
+
+configs:
+  mosquitto.conf:
+    content: |
+      listener 1883
+      allow_anonymous true
+  telegraf.conf:
+    content: |
+      [agent]
+        interval = "1s"
+        flush_interval = "5s"
+
+      [[inputs.mqtt_consumer]]
+        servers = ["tcp://mosquitto:1883"]
+        topics = ["sensors/+"]
+        data_format = "json"
+        json_time_key = "timestamp"
+        json_time_format = "unix_ms"
+        [[inputs.mqtt_consumer.topic_parsing]]
+          topic = "sensors/+"
+          measurement = "_/measurement"
+
+      [[outputs.influxdb_v2]]
+        urls = ["http://victoriametrics:8428"]
+
+volumes:
+  grafana-storage: {}
+  victoria-storage: {}
+networks:
+  cardash:
